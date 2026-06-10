@@ -40,10 +40,7 @@ impl Component for Home {
         Ok(())
     }
 
-    fn update(&mut self, action: Action) -> color_eyre::Result<Option<Action>> {
-        match action {
-            _ => {}
-        }
+    fn update(&mut self, _action: Action) -> color_eyre::Result<Option<Action>> {
         Ok(None)
     }
 
