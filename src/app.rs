@@ -37,17 +37,21 @@ impl App {
         domain: String,
         list: String,
         query: String,
+        kernel_tree: Option<String>,
     ) -> color_eyre::Result<Self> {
         let (action_tx, action_rx) = mpsc::unbounded_channel();
+        let mut components: Vec<Box<dyn Component>> = vec![
+            Box::new(Home::new()),
+            Box::new(Lei::new(domain.clone(), list, query)),
+            Box::new(Patchsets::new(domain)),
+        ];
+        if let Some(tree) = kernel_tree {
+            components.push(Box::new(Ktree::new(tree)));
+        }
         Ok(Self {
             tick_rate,
             frame_rate,
-            components: vec![
-                Box::new(Home::new()),
-                Box::new(Lei::new(domain, list, query)),
-                Box::new(Patchsets::new()),
-                Box::new(Ktree::new()),
-            ],
+            components,
             should_quit: false,
             should_suspend: false,
             config: Config::new()?,

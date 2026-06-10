@@ -1,0 +1,21 @@
+From abc123def456 Mon Sep 17 00:00:00 2001
+From: Test Author <test@test.com>
+Date: Mon, 1 Jan 2024 00:00:00 +0000
+Subject: [PATCH] Add hello.txt
+
+Create a simple hello file.
+---
+ hello.txt | 1 +
+ 1 file changed, 1 insertion(+)
+ create mode 100644 hello.txt
+
+diff --git a/hello.txt b/hello.txt
+new file mode 100644
+index 0000000..ce01362
+--- /dev/null
++++ b/hello.txt
+@@ -0,0 +1 @@
++hello
+-- 
+2.40.0
+

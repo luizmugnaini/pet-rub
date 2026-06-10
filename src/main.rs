@@ -24,6 +24,7 @@ async fn main() -> color_eyre::Result<()> {
         args.domain,
         args.list,
         args.query,
+        args.kernel_tree,
     )?;
     app.run().await?;
     Ok(())

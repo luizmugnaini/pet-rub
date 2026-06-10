@@ -14,13 +14,11 @@ use tracing::{error, info};
 
 use crate::{
     action::Action,
-    components::{Component, patchsets},
+    components::{Component, SPINNER, patchsets},
     config::Config,
 };
 
 const MAX_NOTIFICATION_TICKS: usize = 8;
-const MAX_SPINNER: usize = 4;
-const SPINNER: [&str; MAX_SPINNER] = ["", ".", "..", "..."];
 
 #[derive(Debug, Clone, PartialEq, Eq, Display, Serialize, Deserialize)]
 pub enum LocalMode {
@@ -64,14 +62,15 @@ impl Lei {
         tokio::spawn(async move {
             tx.send(Action::LeiSetMode(LocalMode::Processing)).unwrap();
 
-            data_dir.push(format!("{list}"));
+            data_dir.push(list.as_str());
             let inbox_dir_str = data_dir.to_str().unwrap();
             let mut data_dir = data_dir.clone();
             data_dir.pop();
             data_dir.push(format!("{list}.json"));
-            let json_path_str = data_dir.to_str().unwrap();
+            let json_path_str = data_dir.to_str().unwrap().to_string();
 
             info!("fetching patchsets from {inbox_dir_str}");
+            let _ = tokio::fs::create_dir_all(data_dir.parent().unwrap_or(&data_dir)).await;
             tx.send(Action::PatchsetsSetMode(patchsets::LocalMode::Processing))
                 .unwrap();
             if let Ok(output) = File::create(&json_path_str) {
@@ -81,7 +80,7 @@ impl Lei {
                     .arg("--no-local")
                     .arg("--threads")
                     .arg("--dedupe=mid")
-                    .arg(query)
+                    .arg(&query)
                     .stdout(output)
                     .stderr(Stdio::null())
                     .status()
@@ -90,8 +89,8 @@ impl Lei {
                     if !exit_status.success() {
                         error!("lei command exit status was unsuccessful {exit_status:?}");
                     }
-                    tx.send(Action::PatchsetsList(json_path_str.to_string()))
-                        .unwrap();
+
+                    tx.send(Action::PatchsetsList(json_path_str)).unwrap();
                 } else {
                     error!("failed to execute command");
                 }
@@ -139,7 +138,7 @@ impl Component for Lei {
                     }
                 } else if self.local_mode != LocalMode::Idle {
                     self.spinner += 1;
-                    if self.spinner >= MAX_SPINNER {
+                    if self.spinner >= SPINNER.len() {
                         self.spinner = 0;
                     }
                 }
@@ -193,7 +192,7 @@ impl Component for Lei {
             rects[0],
         );
 
-        let text = format!("{}", self.query);
+        let text = self.query.to_string();
         frame.render_widget(
             Paragraph::new(text)
                 .block(

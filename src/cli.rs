@@ -24,6 +24,10 @@ pub struct Cli {
     /// Xapian queries
     #[arg(short, long, value_name = "query", default_value_t = String::from("((s:patch OR s:rfc) AND NOT s:re:) AND rt:1.month.ago.."))]
     pub query: String,
+
+    /// Path to local kernel tree git repository
+    #[arg(long, value_name = "path")]
+    pub kernel_tree: Option<String>,
 }
 
 const VERSION_MESSAGE: &str = concat!(

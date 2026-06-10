@@ -40,6 +40,7 @@ pub enum LocalMode {
 }
 
 pub struct Patchsets {
+    command_tx: Option<tokio::sync::mpsc::UnboundedSender<Action>>,
     local_mode: LocalMode,
     messages: Vec<Message>,
     map_id_message: HashMap<String, Message>,
@@ -48,11 +49,14 @@ pub struct Patchsets {
     list_index: usize,
     thread: Vec<(usize, String)>,
     thread_index: usize,
+    domain: String,
+    applying: bool,
 }
 
 impl Patchsets {
-    pub fn new() -> Self {
+    pub fn new(domain: String) -> Self {
         Self {
+            command_tx: None,
             local_mode: LocalMode::Idle,
             messages: Vec::new(),
             map_id_message: HashMap::new(),
@@ -61,6 +65,8 @@ impl Patchsets {
             list_index: 0,
             thread: Vec::new(),
             thread_index: 0,
+            domain,
+            applying: false,
         }
     }
 
@@ -76,10 +82,8 @@ impl Patchsets {
         let raw_values: Vec<serde_json::Value> = serde_json::from_str(&data)?;
 
         for val in raw_values {
-            if val.is_object() {
-                if let Ok(message) = serde_json::from_value::<Message>(val) {
-                    self.messages.push(message);
-                }
+            if let Ok(message) = serde_json::from_value::<Message>(val) {
+                self.messages.push(message);
             }
         }
 
@@ -159,7 +163,7 @@ impl Patchsets {
         let mut stack = vec![(0, root_m_id)];
 
         while let Some((i, current_m_id)) = stack.pop() {
-            if let Some(_) = self.map_id_message.get(&current_m_id) {
+            if self.map_id_message.contains_key(&current_m_id) {
                 self.thread.push((i, current_m_id.clone()));
             }
 
@@ -171,9 +175,62 @@ impl Patchsets {
 
         self.local_mode = LocalMode::Thread;
     }
+
+    fn download_and_apply(&mut self, message_id: String) {
+        self.applying = true;
+        let tx = self.command_tx.clone().unwrap();
+        let domain = self.domain.clone();
+        tx.send(Action::KtreeSetMode(
+            crate::components::ktree::LocalMode::Applying,
+        ))
+        .ok();
+
+        tokio::spawn(async move {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static COUNTER: AtomicU64 = AtomicU64::new(0);
+            let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+            let tmp_path = format!(
+                "{}/patch-hub-{}-{id}.mbox",
+                std::env::temp_dir().display(),
+                std::process::id()
+            );
+
+            let url = format!("https://{domain}/all/{message_id}/raw");
+            let output = tokio::process::Command::new("curl")
+                .args(["-sf", "-H", "User-Agent: patch-hub", "-o", &tmp_path, &url])
+                .output()
+                .await;
+
+            match output {
+                Ok(out) if out.status.success() => {
+                    let _ = tx.send(Action::KtreeApply(tmp_path));
+                }
+                Ok(out) => {
+                    let _ = tx.send(Action::KtreeResult(crate::action::KtreeStatus::Failed(
+                        format!("download failed: HTTP {}", out.status),
+                    )));
+                    let _ = std::fs::remove_file(&tmp_path);
+                }
+                Err(e) => {
+                    let _ = tx.send(Action::KtreeResult(crate::action::KtreeStatus::Failed(
+                        format!("download failed: {e}"),
+                    )));
+                    let _ = std::fs::remove_file(&tmp_path);
+                }
+            }
+        });
+    }
 }
 
 impl Component for Patchsets {
+    fn register_action_handler(
+        &mut self,
+        tx: tokio::sync::mpsc::UnboundedSender<Action>,
+    ) -> color_eyre::Result<()> {
+        self.command_tx = Some(tx);
+        Ok(())
+    }
+
     fn handle_key_event(&mut self, key: KeyEvent) -> color_eyre::Result<Option<Action>> {
         let action = match self.local_mode {
             LocalMode::Listing => match key.code {
@@ -186,6 +243,14 @@ impl Component for Patchsets {
                 KeyCode::Char('j') => Some(Action::PatchsetsAddIndex),
                 KeyCode::Char('k') => Some(Action::PatchsetsSubIndex),
                 KeyCode::Esc => Some(Action::PatchsetsSetMode(LocalMode::Listing)),
+                KeyCode::Char('a') => {
+                    if !self.applying
+                        && let Some((_, m_id)) = self.thread.get(self.thread_index)
+                    {
+                        self.download_and_apply(m_id.clone());
+                    }
+                    None
+                }
                 _ => None,
             },
             _ => None,
@@ -197,17 +262,13 @@ impl Component for Patchsets {
     fn update(&mut self, action: Action) -> color_eyre::Result<Option<Action>> {
         match action {
             Action::PatchsetsSetMode(local_mode) => self.local_mode = local_mode,
-            Action::PatchsetsList(json_path_str) => self.prepare_list(json_path_str)?,
+            Action::PatchsetsList(json_path) => self.prepare_list(json_path)?,
             Action::PatchsetsAddIndex => match self.local_mode {
-                LocalMode::Listing => {
-                    if self.list_index < self.roots.len() - 1 {
-                        self.list_index = self.list_index + 1;
-                    }
+                LocalMode::Listing if self.list_index < self.roots.len() - 1 => {
+                    self.list_index += 1;
                 }
-                LocalMode::Thread => {
-                    if self.thread_index < self.thread.len() - 1 {
-                        self.thread_index = self.thread_index + 1;
-                    }
+                LocalMode::Thread if self.thread_index < self.thread.len() - 1 => {
+                    self.thread_index += 1;
                 }
                 _ => {}
             },
@@ -217,6 +278,7 @@ impl Component for Patchsets {
                 _ => {}
             },
             Action::PatchsetsThread => self.open_thread(),
+            Action::KtreeResult(_) => self.applying = false,
             _ => {}
         }
         Ok(None)
